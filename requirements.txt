@@ -1,0 +1,5 @@
+chromadb>=0.4.24
+python-dotenv>=1.0.0
+pypdf>=3.17.0
+sentence-transformers>=2.2.2
+openai>=1.0.0
