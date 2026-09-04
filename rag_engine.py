@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from openai import OpenAI
+from openai import OpenAI, AuthenticationError
 
 from config import OPENAI_API_KEY, OPENAI_MODEL
 from vector_store import VectorStore
@@ -8,7 +8,8 @@ from vector_store import VectorStore
 class RAGEngine:
     def __init__(self, vector_store: VectorStore):
         self.vector_store = vector_store
-        self.client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+        is_placeholder = not OPENAI_API_KEY or "your_openai_api_key" in OPENAI_API_KEY.lower()
+        self.client = OpenAI(api_key=OPENAI_API_KEY) if not is_placeholder else None
         self.model = OPENAI_MODEL
 
     def build_context(self, retrieved_docs: List[Dict[str, Any]]) -> str:
@@ -32,7 +33,7 @@ class RAGEngine:
 
         if not self.client:
             return {
-                "answer": "OPENAI_API_KEY is not set. Showing retrieved context directly:\n\n" + context,
+                "answer": "[API Key not configured or placeholder detected]\n\nRetrieved Relevant Segments:\n\n" + context,
                 "sources": list(set(sources))
             }
 
@@ -45,16 +46,21 @@ class RAGEngine:
 
         user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.2
-        )
-
-        answer_text = response.choices[0].message.content.strip()
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.2
+            )
+            answer_text = response.choices[0].message.content.strip()
+        except AuthenticationError:
+            answer_text = (
+                "[Invalid OpenAI API Key]\n\n"
+                "Falling back to direct semantic retrieval results:\n\n" + context
+            )
 
         return {
             "answer": answer_text,
