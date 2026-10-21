@@ -1,26 +1,32 @@
-# RAG Document Search Engine
+# Hybrid RAG Document Search Engine
 
-A lightweight, local-first Retrieval-Augmented Generation (RAG) system built in Python. This project allows users to ingest local documents (`.txt` and `.pdf`), generate dense vector embeddings, store them in ChromaDB, and execute grounded semantic queries with citations.
+A local-first, modular Retrieval-Augmented Generation (RAG) platform written in Python. The system merges dense semantic vector retrieval (via ChromaDB and Sentence-Transformers) with sparse lexical keyword matching (BM25Okapi) using Reciprocal Rank Fusion (RRF), providing grounded answers with deterministic source citations.
 
 ---
 
-## Architecture Overview
+## Architectural Flow
 
-User Query ──► Sentence-Transformers (Embedding)
-│
-▼
-[Raw Documents] ──► Text Chunker ──► ChromaDB Vector Store
-│
-Top-k Relevant Chunks
-│
-▼
-Context + Prompt Template ───────► OpenAI LLM ──► Grounded Answer + Citations
+User Query
+    │
+    ├───► Dense Semantic Retriever (ChromaDB + all-MiniLM-L6-v2) ──► Candidate Set A
+    │
+    └───► Sparse Lexical Retriever (BM25 Okapi Engine)            ──► Candidate Set B
+                                                                         │
+                                                                         ▼
+Context Assembly ◄─── Reciprocal Rank Fusion (RRF Scoring) ◄─────────────┘
+      │
+      ▼
+Prompt Template ───► OpenAI LLM (or Offline Direct Context Mode) ──► Grounded Answer + Citations
 
+---
 
-- **Document Ingestion:** Reads `.txt` and `.pdf` files from the `data/` directory.
-- **Chunking Strategy:** Sliding window chunking with configurable chunk size and overlap.
-- **Vector Storage:** Persistent local ChromaDB using `all-MiniLM-L6-v2` embeddings.
-- **Retrieval & Synthesis:** Similarity search with distance filtering, combined with LLM prompt context injection.
+## Key Features
+
+- **Hybrid Retrieval System:** Combines semantic similarity with sparse keyword searches to effectively catch specialized domain codes, technical terms, and high-level concepts.
+- **Reciprocal Rank Fusion (RRF):** Evaluates overlapping candidate positions and balances semantic and lexical signals using standard constant dampening ($k=60$).
+- **Structured Metadata Tracking:** Every processed text chunk includes source filenames, relative chunk offsets, parent document hashes, and character counts.
+- **Fail-Safe Offline Mode:** Operates natively in an offline direct-context output mode if no OpenAI API key is supplied in the local environment.
+- **Secure File Boundaries:** All database artifacts, environment variables, virtual environments, and caches are isolated and ignored from version control.
 
 ---
 
@@ -28,47 +34,49 @@ Context + Prompt Template ───────► OpenAI LLM ──► Grounded
 
 ```text
 rag-document-search/
-├── data/                  # Source documents directory (.txt, .pdf)
-├── chroma_db/             # Local persistent vector database (git-ignored)
-├── .env.example           # Template for environment variables
-├── .gitignore             # Secrets, database, and virtual environment ignore rules
-├── requirements.txt       # Project dependencies
-├── config.py              # Central application configuration
-├── document_loader.py     # File parsing and text chunking
-├── vector_store.py        # ChromaDB wrapper with distance thresholding
-├── rag_engine.py          # Context builder and LLM synthesis
-└── main.py                # CLI application entrypoint
+├── data/                       # Directory for source documents (.txt, .pdf)
+├── tests/                      # Automated test suites (Pytest / Unittest)
+│   ├── test_document_loader.py
+│   ├── test_vector_store.py
+│   └── test_hybrid_retriever.py
+├── chroma_db/                  # Local persistent Chroma vector database (git-ignored)
+├── .env.example                # Template for environment configuration
+├── .gitignore                  # Security, database, and virtual environment ignore rules
+├── requirements.txt            # Python dependencies
+├── config.py                   # Global configuration parameters
+├── document_loader.py          # Document parsers, sanitizers, and chunking logic
+├── bm25_retriever.py           # Sparse lexical search module using BM25
+├── vector_store.py             # ChromaDB persistent store with batched upserts
+├── hybrid_retriever.py         # Reciprocal Rank Fusion hybrid search engine
+├── rag_engine.py               # Prompt generation, context builder, and LLM synthesis
+└── main.py                     # Interactive CLI entrypoint
 Getting Started
-1. Prerequisites
-Python 3.10+
-
-Git
-
-2. Environment Setup
-Clone the repository and create an isolated virtual environment:
+1. Virtual Environment Setup
+Ensure PowerShell execution policies permit virtual environment activation:
 
 PowerShell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-3. Environment Variables
-Copy .env.example to .env:
+2. Environment Variables
+Create your local environment file:
 
 PowerShell
 Copy-Item .env.example .env
-Edit .env and configure your credentials:
+Configure your credentials inside .env:
 
-Code snippet
+Plaintext
 OPENAI_API_KEY=your_actual_api_key_here
 OPENAI_MODEL=gpt-4o-mini
-EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
-Note: If an API key is not provided, the engine operates in semantic-only mode, returning the top retrieved document chunks directly.
+Note: If no API key is specified, the engine safely defaults to semantic and lexical retrieval mode without raising errors.
 
-Usage
-Place your .txt or .pdf files inside the data/ folder.
-
-Run the application:
+Running the Application
+Place your knowledge documents (.txt or .pdf) into the data/ folder, then start the interface:
 
 PowerShell
 python main.py
-Ask natural language questions in the CLI interface. Type exit or quit to leave the interactive prompt.
+Running Test Suites
+To run all unit tests including the reciprocal rank fusion suite:
+
+PowerShell
+python -m pytest tests/
