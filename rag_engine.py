@@ -1,68 +1,89 @@
+import os
 from typing import List, Dict, Any
-from openai import OpenAI, AuthenticationError
-
-from config import OPENAI_API_KEY, OPENAI_MODEL
-from vector_store import VectorStore
+from openai import OpenAI
 
 
 class RAGEngine:
-    def __init__(self, vector_store: VectorStore):
-        self.vector_store = vector_store
-        is_placeholder = not OPENAI_API_KEY or "your_openai_api_key" in OPENAI_API_KEY.lower()
-        self.client = OpenAI(api_key=OPENAI_API_KEY) if not is_placeholder else None
-        self.model = OPENAI_MODEL
+    def __init__(self, retriever, model_name: str = "gpt-4o-mini"):
+        self.retriever = retriever
+        self.model_name = model_name
+        self.api_key = os.getenv("OPENAI_API_KEY", "")
+        self.client = None
 
-    def build_context(self, retrieved_docs: List[Dict[str, Any]]) -> str:
-        context_parts = []
-        for idx, doc in enumerate(retrieved_docs, start=1):
-            source = doc.get("metadata", {}).get("source", "Unknown Source")
-            context_parts.append(f"[Document {idx} - Source: {source}]\n{doc['text']}")
-        return "\n\n".join(context_parts)
+        if self.api_key and len(self.api_key.strip()) > 0:
+            self.client = OpenAI(api_key=self.api_key)
+        else:
+            print("Notice: OPENAI_API_KEY not found. Operating in offline semantic mode.")
 
-    def answer_question(self, question: str, n_results: int = 3) -> Dict[str, Any]:
-        retrieved_docs = self.vector_store.query(query_text=question, n_results=n_results)
+    def format_context_passages(self, chunks: List[Dict[str, Any]]) -> str:
+        formatted_blocks = []
 
-        if not retrieved_docs:
+        for index, item in enumerate(chunks):
+            passage_text = item.get("text", "").strip()
+            meta = item.get("metadata", {})
+            source_file = meta.get("source", "unknown")
+            chunk_idx = meta.get("chunk_index", index)
+
+            header = f"[Document: {source_file} | Chunk: {chunk_idx}]"
+            block = f"{header}\n{passage_text}"
+            formatted_blocks.append(block)
+
+        full_context = "\n\n".join(formatted_blocks)
+        return full_context
+
+    def generate_prompt(self, query: str, context: str) -> str:
+        prompt_template = (
+            "You are a factual, concise knowledge assistant.\n"
+            "Answer the user question strictly using the provided context below.\n"
+            "If the information is not contained in the context, clearly state that you don't know.\n"
+            "Always cite the source document name when mentioning specific facts.\n\n"
+            f"Context:\n{context}\n\n"
+            f"Question: {query}\n\n"
+            "Answer:"
+        )
+        return prompt_template
+
+    def ask(self, query: str, top_k: int = 4) -> Dict[str, Any]:
+        clean_query = query.strip()
+        if not clean_query:
             return {
-                "answer": "No relevant documents found in the database.",
+                "answer": "Query is empty.",
                 "sources": []
             }
 
-        context = self.build_context(retrieved_docs)
-        sources = [doc.get("metadata", {}).get("source", "Unknown") for doc in retrieved_docs]
+        retrieved_candidates = self.retriever.search(clean_query, top_k=top_k)
 
-        if not self.client:
+        if not retrieved_candidates:
             return {
-                "answer": "[API Key not configured or placeholder detected]\n\nRetrieved Relevant Segments:\n\n" + context,
-                "sources": list(set(sources))
+                "answer": "No relevant documents found for your query.",
+                "sources": []
             }
 
-        system_prompt = (
-            "You are an assistant for question-answering tasks. "
-            "Use the following retrieved context pieces to answer the question. "
-            "If you do not know the answer based on the context, say that you do not know. "
-            "Keep the answer concise, accurate, and faithful to the context."
-        )
+        context_string = self.format_context_passages(retrieved_candidates)
 
-        user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+        if not self.client:
+            offline_answer = "Semantic Mode (No LLM API Key):\n" + context_string
+            return {
+                "answer": offline_answer,
+                "sources": retrieved_candidates
+            }
+
+        prompt_message = self.generate_prompt(clean_query, context_string)
 
         try:
             response = self.client.chat.completions.create(
-                model=self.model,
+                model=self.model_name,
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "system", "content": "You are a helpful assistant that answers questions based on documents."},
+                    {"role": "user", "content": prompt_message}
                 ],
                 temperature=0.2
             )
             answer_text = response.choices[0].message.content.strip()
-        except AuthenticationError:
-            answer_text = (
-                "[Invalid OpenAI API Key]\n\n"
-                "Falling back to direct semantic retrieval results:\n\n" + context
-            )
+        except Exception as err:
+            answer_text = f"LLM Generation Error: {err}\n\nFallback context:\n{context_string}"
 
         return {
             "answer": answer_text,
-            "sources": list(set(sources))
+            "sources": retrieved_candidates
         }
