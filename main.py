@@ -1,72 +1,96 @@
+import os
 import sys
+from dotenv import load_dotenv
+
 from document_loader import DocumentLoader
 from vector_store import VectorStore
+from bm25_retriever import BM25Retriever
+from hybrid_retriever import HybridRetriever
 from rag_engine import RAGEngine
 
 
-def index_documents(vector_store: VectorStore) -> None:
-    print("Scanning data directory for documents...")
-    loader = DocumentLoader()
-    chunked_docs = loader.process()
+def bootstrap_system():
+    load_dotenv()
 
-    if not chunked_docs:
-        print("No documents found in the 'data' directory.")
-        print("Place .txt or .pdf files in the 'data' folder and run again.")
-        return
+    print("Initializing document ingestion pipeline...")
+    loader = DocumentLoader(data_directory="data")
+    chunks = loader.process_all_documents(chunk_size=500, overlap=50)
 
-    print(f"Extracted {len(chunked_docs)} chunks from documents.")
-    added_count = vector_store.add_documents(chunked_docs)
-    print(f"Successfully indexed {added_count} chunks into ChromaDB.")
+    if len(chunks) == 0:
+        print("Warning: No documents were found in the data/ folder.")
+        print("Please place .txt or .pdf files into the data directory.")
+    else:
+        print(f"Loaded and chunked {len(chunks)} total text segments.")
+
+    print("Setting up persistent vector store...")
+    vector_store = VectorStore(
+        collection_name="rag_hybrid_collection",
+        persist_directory="chroma_db"
+    )
+
+    if len(chunks) > 0:
+        vector_store.add_documents(chunks)
+
+    print("Setting up BM25 keyword index...")
+    bm25 = BM25Retriever()
+    if len(chunks) > 0:
+        bm25.index_documents(chunks)
+
+    print("Assembling hybrid rank fusion retriever...")
+    retriever = HybridRetriever(
+        vector_store=vector_store,
+        bm25_retriever=bm25,
+        rrf_k=60
+    )
+
+    model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    rag = RAGEngine(retriever=retriever, model_name=model_name)
+
+    return rag
 
 
-def interactive_cli(rag_engine: RAGEngine) -> None:
+def start_cli_loop(engine: RAGEngine):
     print("\n" + "=" * 50)
-    print("RAG Document Search Ready")
-    print("Type your question below (or type 'exit' or 'quit' to stop):")
+    print("Hybrid RAG Knowledge Base CLI Ready.")
+    print("Type your question below, or type 'exit' or 'quit' to close.")
     print("=" * 50 + "\n")
 
     while True:
         try:
-            query = input("User Query: ").strip()
-            if not query:
-                continue
+            user_input = input("Query > ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting session.")
+            break
 
-            if query.lower() in {"exit", "quit"}:
-                print("Exiting application.")
-                sys.exit(0)
+        if not user_input:
+            continue
 
-            print("\nSearching documents and generating response...\n")
-            result = rag_engine.answer_question(query)
+        lowered = user_input.lower()
+        if lowered == "exit" or lowered == "quit":
+            print("Goodbye.")
+            break
 
-            print("--- Answer ---")
-            print(result["answer"])
-            print("\n--- Sources ---")
-            for source in result["sources"]:
-                print(f"- {source}")
-            print("-" * 50 + "\n")
+        print("\nSearching and formulating response...")
+        result = engine.ask(user_input, top_k=4)
 
-        except KeyboardInterrupt:
-            print("\nInterrupted by user. Exiting.")
-            sys.exit(0)
-        except Exception as e:
-            print(f"An error occurred: {e}\n")
+        answer_text = result.get("answer", "")
+        sources_list = result.get("sources", [])
 
+        print("\n--- Answer ---")
+        print(answer_text)
 
-def main() -> None:
-    vector_store = VectorStore()
+        if len(sources_list) > 0:
+            print("\n--- Retrieved Sources & Citations ---")
+            for idx, item in enumerate(sources_list):
+                meta = item.get("metadata", {})
+                source_doc = meta.get("source", "unknown")
+                chunk_idx = meta.get("chunk_index", "N/A")
+                score_val = item.get("rrf_score", 0.0)
+                print(f"[{idx + 1}] File: {source_doc} (Chunk #{chunk_idx}) | RRF Score: {score_val:.4f}")
 
-    if vector_store.count() == 0:
-        print("Vector database is empty. Performing initial ingestion...")
-        index_documents(vector_store)
-    else:
-        print(f"Loaded existing database with {vector_store.count()} indexed chunks.")
-        reindex = input("Do you want to re-scan and index documents? (y/N): ").strip().lower()
-        if reindex == "y":
-            index_documents(vector_store)
-
-    engine = RAGEngine(vector_store=vector_store)
-    interactive_cli(engine)
+        print("\n" + "-" * 50 + "\n")
 
 
 if __name__ == "__main__":
-    main()
+    app_engine = bootstrap_system()
+    start_cli_loop(app_engine)
