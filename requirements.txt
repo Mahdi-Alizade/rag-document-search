@@ -1,6 +1,8 @@
-chromadb>=0.4.24
-python-dotenv>=1.0.0
-pypdf>=3.17.0
-sentence-transformers>=2.2.2
+# D:\Mahdi Alizade\Projects\rag-document-search\requirements.txt
 openai>=1.0.0
-pytest>=8.0.0
+chromadb>=0.4.22
+sentence-transformers>=2.2.2
+pypdf>=3.17.0
+python-dotenv>=1.0.0
+rank-bm25>=0.2.2
+pytest>=7.4.0
