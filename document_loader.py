@@ -1,81 +1,126 @@
-from pathlib import Path
+import os
+import hashlib
 from typing import List, Dict, Any
 from pypdf import PdfReader
 
-from config import DATA_DIR, CHUNK_SIZE, CHUNK_OVERLAP
-
 
 class DocumentLoader:
-    def __init__(self, data_dir: Path = DATA_DIR):
-        self.data_dir = data_dir
+    def __init__(self, data_directory: str = "data"):
+        self.data_directory = data_directory
 
-    def load_text_file(self, file_path: Path) -> str:
-        with open(file_path, "r", encoding="utf-8") as f:
-            return f.read()
+    def _generate_doc_id(self, file_path: str) -> str:
+        base_name = os.path.basename(file_path)
+        hasher = hashlib.md5()
+        hasher.update(base_name.encode("utf-8"))
+        unique_hash = hasher.hexdigest()[:8]
+        return f"{base_name}_{unique_hash}"
 
-    def load_pdf_file(self, file_path: Path) -> str:
-        reader = PdfReader(str(file_path))
-        pages_text = []
-        for page in reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                pages_text.append(extracted)
-        return "\n".join(pages_text)
+    def read_text_file(self, full_path: str) -> str:
+        text_content = ""
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                text_content = f.read()
+        except UnicodeDecodeError:
+            with open(full_path, "r", encoding="latin-1") as f:
+                text_content = f.read()
+        except Exception as err:
+            print(f"Error reading text file {full_path}: {err}")
+            text_content = ""
+        return text_content
 
-    def load_documents(self) -> List[Dict[str, Any]]:
-        documents = []
-        supported_extensions = {".txt", ".pdf"}
+    def read_pdf_file(self, full_path: str) -> str:
+        extracted_text = ""
+        try:
+            reader = PdfReader(full_path)
+            for page_num, page in enumerate(reader.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    extracted_text = extracted_text + "\n" + page_text
+        except Exception as err:
+            print(f"Failed to read PDF file {full_path}: {err}")
+            extracted_text = ""
+        return extracted_text
 
-        for file_path in self.data_dir.iterdir():
-            if file_path.suffix.lower() not in supported_extensions:
+    def load_raw_documents(self) -> List[Dict[str, Any]]:
+        raw_docs = []
+        if not os.path.exists(self.data_directory):
+            print(f"Data directory not found: {self.data_directory}")
+            return raw_docs
+
+        for file_name in os.listdir(self.data_directory):
+            file_path = os.path.join(self.data_directory, file_name)
+            
+            if not os.path.isfile(file_path):
                 continue
 
-            try:
-                if file_path.suffix.lower() == ".txt":
-                    content = self.load_text_file(file_path)
-                elif file_path.suffix.lower() == ".pdf":
-                    content = self.load_pdf_file(file_path)
-                else:
-                    content = ""
+            content = ""
+            if file_name.endswith(".txt"):
+                content = self.read_text_file(file_path)
+            elif file_name.endswith(".pdf"):
+                content = self.read_pdf_file(file_path)
+            else:
+                continue
 
-                if content.strip():
-                    documents.append({
-                        "source": file_path.name,
-                        "content": content
-                    })
-            except Exception as e:
-                print(f"Error reading file {file_path.name}: {e}")
+            cleaned_content = content.strip()
+            if len(cleaned_content) > 0:
+                doc_record = {
+                    "source": file_name,
+                    "doc_id": self._generate_doc_id(file_name),
+                    "content": cleaned_content
+                }
+                raw_docs.append(doc_record)
 
-        return documents
+        return raw_docs
 
-    def chunk_text(self, text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+    def chunk_document(self, content: str, chunk_size: int = 500, overlap: int = 50) -> List[str]:
         chunks = []
-        start = 0
-        text_length = len(text)
+        if not content:
+            return chunks
 
-        while start < text_length:
-            end = start + chunk_size
-            chunk = text[start:end].strip()
-            if chunk:
-                chunks.append(chunk)
-            start += (chunk_size - overlap)
+        start_index = 0
+        text_length = len(content)
+
+        while start_index < text_length:
+            end_index = start_index + chunk_size
+            chunk_slice = content[start_index:end_index]
+            
+            clean_slice = chunk_slice.strip()
+            if clean_slice:
+                chunks.append(clean_slice)
+
+            if end_index >= text_length:
+                break
+
+            start_index = start_index + (chunk_size - overlap)
 
         return chunks
 
-    def process(self) -> List[Dict[str, Any]]:
-        raw_documents = self.load_documents()
-        chunked_documents = []
+    def process_all_documents(self, chunk_size: int = 500, overlap: int = 50) -> List[Dict[str, Any]]:
+        all_processed_chunks = []
+        loaded_docs = self.load_raw_documents()
 
-        for doc in raw_documents:
-            chunks = self.chunk_text(doc["content"])
-            for idx, chunk in enumerate(chunks):
-                chunked_documents.append({
-                    "id": f"{doc['source']}_chunk_{idx}",
-                    "text": chunk,
-                    "metadata": {
-                        "source": doc["source"],
-                        "chunk_index": idx
-                    }
-                })
+        for doc in loaded_docs:
+            raw_text = doc["content"]
+            source_file = doc["source"]
+            base_doc_id = doc["doc_id"]
 
-        return chunked_documents
+            pieces = self.chunk_document(raw_text, chunk_size=chunk_size, overlap=overlap)
+            total_chunks = len(pieces)
+
+            for idx, chunk_text in enumerate(pieces):
+                metadata = {
+                    "source": source_file,
+                    "doc_id": base_doc_id,
+                    "chunk_index": idx,
+                    "total_chunks": total_chunks,
+                    "char_count": len(chunk_text)
+                }
+
+                chunk_entry = {
+                    "id": f"{base_doc_id}_chunk_{idx}",
+                    "text": chunk_text,
+                    "metadata": metadata
+                }
+                all_processed_chunks.append(chunk_entry)
+
+        return all_processed_chunks
