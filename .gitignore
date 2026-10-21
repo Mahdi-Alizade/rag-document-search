@@ -1,28 +1,33 @@
-# Virtual Environment
+# D:\Mahdi Alizade\Projects\rag-document-search\.gitignore
+
+# Environment variables & secrets
+.env
+*.env
+.env.local
+
+# Virtual environments
 venv/
 .venv/
 env/
 
-# Byte-compiled / cache files
+# Python cache & bytecode
 __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
 
-# Environment Variables & Secrets
-.env
-*.env
-
-# Local Chroma Vector Database
+# Database & local data storage
 chroma_db/
-chroma_data/
+*.db
+*.sqlite3
 
-# Data directory contents (excluding placeholder)
-data/*
-!data/.gitkeep
-
-# IDE & OS files
-.vscode/
-.idea/
-.DS_Store
+# OS generated files
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
